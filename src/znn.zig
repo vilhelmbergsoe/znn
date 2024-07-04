@@ -69,65 +69,31 @@ pub fn Tensor(comptime T: type) type {
             }
 
             // [[1,2], [1,2]]
-            pub fn from(allocator: std.mem.Allocator, data: anytype) !Self {
-                // const DataType = @TypeOf(data);
-                // const DataTypeInfo = @typeInfo(DataType);
-                // std.debug.print("DataType: {any}\nDataTypeInfo: {any}\n", .{ DataType, DataTypeInfo });
-
-                // Infer shape of input data
-                const maxDims = 3;
-                var shape: [maxDims]usize = undefined;
-
-                var dims: usize = 0;
-
-                var currData = data;
-                inline for (shape, 0..) |_, i| {
-                    const DataType = @TypeOf(currData);
-                    const DataTypeInfo = @typeInfo(DataType);
-
-                    if (DataTypeInfo != .Array) {
-                        break;
-                    }
-
-                    shape[i] = currData.len;
-                    if (currData.len > 0) {
-                        currData = currData[0];
-                        dims += 1;
-                    } else {
-                        break;
-                    }
-                }
-
-                const inferredShape = shape[0..dims];
-                const tensor = try Self.init(allocator, inferredShape);
-
-                // Calculate the total number of elements
-                var totalElements: usize = 1;
-                inline for (inferredShape) |dim| {
-                    totalElements *= dim;
-                }
-
+            pub fn from(allocator: std.mem.Allocator, data: anytype, shape: anytype) !Self {
                 const DataType = @TypeOf(data);
                 const DataTypeInfo = @typeInfo(DataType);
 
-                switch (DataTypeInfo) {
-                    .Array => {
-                        std.mem.copy(T, tensor.storage, @bitCast(data[0..totalElements]));
-                    },
-                    //.Float, .Int, .ComptimeFloat, .ComptimeInt => {
-                    else => return error.InvalidData,
-                }
                 // switch (DataTypeInfo) {
                 //     .Array => {
+                //         @memcpy(tensor.storage, &data);
                 //     },
-                //     .Float, .Int, .ComptimeFloat, .ComptimeInt => {
-                //         // Scalar
-                //         var result = try Self.init(allocator, .{1});
-                //         result.storage[0] = data;
-                //         return result;
-                //     },
-                //     else => @compileError("Unsupported data type provided for 'data'. Expected array, float or int, but found: " ++ @typeName(DataType)),
+                //     //.Float, .Int, .ComptimeFloat, .ComptimeInt => {
+                //     else => return error.InvalidData,
                 // }
+
+                const tensor = try Self.init(allocator, shape);
+
+                switch (DataTypeInfo) {
+                    .Array => {
+                        @memcpy(tensor.storage, &data);
+                    },
+                    .Float, .Int, .ComptimeFloat, .ComptimeInt => {
+                        // Scalar
+                        tensor.storage[0] = data;
+                        tensor.shape = .{1};
+                    },
+                    else => @compileError("Unsupported data type provided for 'data'. Expected array, float or int, but found: " ++ @typeName(DataType)),
+                }
                 return tensor;
             }
 

@@ -7,8 +7,9 @@ pub fn main() !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const a = try znn.Tensor(f32).from(alloc, [_]f32{ 1.0, 2.0 });
-    const b = try znn.Tensor(f32).init(alloc, .{ 2, 1 });
+    const a = try znn.Tensor(f32).from(alloc, [_]f32{1.0}, .{ 1, 1 });
+    const b = try znn.Tensor(f32).from(alloc, [_]f32{ 1.0, 2.0, 3.0, 4.0 }, .{ 1, 4 });
+    // const b = try znn.Tensor(f32).init(alloc, .{ 2, 1 });
 
     const z = try a.matmul(b);
 

@@ -19,8 +19,11 @@
     ...
   } @ inputs: let
     overlays = [
-      (final: prev: {
+      (final: prev: rec {
         zigpkgs = inputs.zig.packages.${prev.system};
+        zls = inputs.nixpkgs.legacyPackages.${prev.system}.zls.overrideAttrs(prev: {
+          nativeBuildInputs = [ zigpkgs.master];
+        });
       })
     ];
 
@@ -33,7 +36,7 @@
         devShells.default = pkgs.mkShell {
           nativeBuildInputs = with pkgs; [
             zigpkgs.master
-            zls
+            # zls
           ];
         };
 

@@ -8,40 +8,47 @@ pub fn Tensor(comptime T: type) type {
         .Float, .Int => struct {
             const Self = @This();
 
+            allocator: std.mem.Allocator,
+
             storage: []T,
             shape: []usize,
             strides: []usize,
-            alloc: std.mem.Allocator,
 
-            pub fn init(alloc: std.mem.Allocator, dims: anytype) !Self {
+            // assuming grad precision to be float32
+            grad: ?*Tensor(f32) = null,
+            requires_grad: bool = false,
+
+            pub fn init(allocator: std.mem.Allocator, dims: anytype) !Self {
                 const DimsType = @TypeOf(dims);
-                const dims_type_info = @typeInfo(DimsType);
-                if (dims_type_info != .Struct) {
-                    @compileError("expected tuple dims argument, found " ++ @typeName(DimsType));
+                const DimsTypeInfo = @typeInfo(DimsType);
+                if (DimsTypeInfo != .Struct) {
+                    @compileError("Expected 'dims' to be a tuple, but found: " ++ @typeName(DimsType));
                 }
 
-                const ndim = dims_type_info.Struct.fields.len;
-                const dims_fields = dims_type_info.Struct.fields;
+                const ndim = DimsTypeInfo.Struct.fields.len;
+                const dimsFields = DimsTypeInfo.Struct.fields;
 
                 // Allocate memory for shape and strides
-                var shape: []usize = try alloc.alloc(usize, ndim);
-                errdefer alloc.free(shape);
+                var shape: []usize = try allocator.alloc(usize, ndim);
+                errdefer allocator.free(shape);
 
-                var strides: []usize = try alloc.alloc(usize, ndim);
-                errdefer alloc.free(strides);
+                var strides: []usize = try allocator.alloc(usize, ndim);
+                errdefer allocator.free(strides);
 
                 // Populate shape and strides
-                inline for (dims_fields, 0..) |field, i| {
+                inline for (dimsFields, 0..) |field, i| {
                     shape[i] = @field(dims, field.name);
                 }
 
                 strides[ndim - 1] = 1;
-                comptime var i: usize = ndim - 2;
-                inline while (i >= 0) : (i -= 1) {
-                    strides[i] = shape[i + 1] * strides[i + 1];
+                if (ndim > 1) {
+                    comptime var i: usize = ndim - 2;
+                    inline while (i >= 0) : (i -= 1) {
+                        strides[i] = shape[i + 1] * strides[i + 1];
 
-                    if (i == 0) {
-                        break;
+                        if (i == 0) {
+                            break;
+                        }
                     }
                 }
 
@@ -50,15 +57,78 @@ pub fn Tensor(comptime T: type) type {
                 for (shape) |dim| {
                     t_size *= dim;
                 }
-                const storage = try alloc.alloc(T, t_size);
-                errdefer alloc.free(storage);
+                const storage = try allocator.alloc(T, t_size);
+                errdefer allocator.free(storage);
 
                 return Self{
+                    .allocator = allocator,
                     .storage = storage,
                     .shape = shape,
                     .strides = strides,
-                    .alloc = alloc,
                 };
+            }
+
+            // [[1,2], [1,2]]
+            pub fn from(allocator: std.mem.Allocator, data: anytype) !Self {
+                // const DataType = @TypeOf(data);
+                // const DataTypeInfo = @typeInfo(DataType);
+                // std.debug.print("DataType: {any}\nDataTypeInfo: {any}\n", .{ DataType, DataTypeInfo });
+
+                // Infer shape of input data
+                const maxDims = 3;
+                var shape: [maxDims]usize = undefined;
+
+                var dims: usize = 0;
+
+                var currData = data;
+                inline for (shape, 0..) |_, i| {
+                    const DataType = @TypeOf(currData);
+                    const DataTypeInfo = @typeInfo(DataType);
+
+                    if (DataTypeInfo != .Array) {
+                        break;
+                    }
+
+                    shape[i] = currData.len;
+                    if (currData.len > 0) {
+                        currData = currData[0];
+                        dims += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                const inferredShape = shape[0..dims];
+                const tensor = try Self.init(allocator, inferredShape);
+
+                // Calculate the total number of elements
+                var totalElements: usize = 1;
+                inline for (inferredShape) |dim| {
+                    totalElements *= dim;
+                }
+
+                const DataType = @TypeOf(data);
+                const DataTypeInfo = @typeInfo(DataType);
+
+                switch (DataTypeInfo) {
+                    .Array => {
+                        std.mem.copy(T, tensor.storage, @bitCast(data[0..totalElements]));
+                    },
+                    //.Float, .Int, .ComptimeFloat, .ComptimeInt => {
+                    else => return error.InvalidData,
+                }
+                // switch (DataTypeInfo) {
+                //     .Array => {
+                //     },
+                //     .Float, .Int, .ComptimeFloat, .ComptimeInt => {
+                //         // Scalar
+                //         var result = try Self.init(allocator, .{1});
+                //         result.storage[0] = data;
+                //         return result;
+                //     },
+                //     else => @compileError("Unsupported data type provided for 'data'. Expected array, float or int, but found: " ++ @typeName(DataType)),
+                // }
+                return tensor;
             }
 
             pub fn matmul(self: Self, other: Self) !Self {
@@ -73,7 +143,7 @@ pub fn Tensor(comptime T: type) type {
                 }
 
                 const output_shape = .{ self.shape[0], other.shape[1] };
-                const output_tensor = try Self.init(self.alloc, output_shape);
+                const output_tensor = try Self.init(self.allocator, output_shape);
 
                 var i: usize = 0;
                 while (i < self.shape[0]) : (i += 1) {
@@ -91,19 +161,28 @@ pub fn Tensor(comptime T: type) type {
                 return output_tensor;
             }
         },
-        else => @compileError("Unknown DType: Tensors can only hold Integers and Floats\n"),
+        else => @compileError("Unsupported dtype: Tensors can only hold integers and floats.\n"),
     };
 }
 
 test "tensor matmul" {
-    var arena = ArenaAllocator.init(std.heap.page_allocator);
+    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const a = try Tensor(f32).init(alloc, .{ 1024, 1024 });
-    const b = try Tensor(f32).init(alloc, .{ 1024, 1024 });
+    const a = try Tensor(f32).init(alloc, .{ 3, 3 });
+    const b = try Tensor(f32).init(alloc, .{ 3, 3 });
 
     const z = try a.matmul(b);
 
-    std.debug.print("z: {any}", .{z});
+    // const a = try Tensor(f32).from(alloc, .{ .{ 1, 2, 3 }, .{ 1, 2, 3 }, .{ 1, 2, 3 } });
+    // const b = try Tensor(f32).init(alloc, .{ 3, 3 });
+    // [_][1]f32{ [_]f32{1.0}, [_]f32{2.0} });
+    // Tensor(f32).from(1.0);
+
+    // const z = try a.matmul(b);
+    std.debug.print("{any}\n", .{z});
+
+    // std.debug.print("z: {any}", .{z});
 }

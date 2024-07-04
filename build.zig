@@ -6,14 +6,26 @@ pub fn build(b: *std.Build) void {
 
     const lib = b.addStaticLibrary(.{
         .name = "znn",
-        // In this case the main source file is merely a path, however, in more
-        // complicated build scripts, this could be a generated file.
         .root_source_file = b.path("src/znn.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     b.installArtifact(lib);
+
+    const exe = b.addExecutable(.{
+        .name = "znn",
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    b.installArtifact(exe);
+
+    const run_exe = b.addRunArtifact(exe);
+
+    const run_step = b.step("run", "Run the application");
+    run_step.dependOn(&run_exe.step);
 
     const lib_unit_tests = b.addTest(.{
         .root_source_file = b.path("src/znn.zig"),
